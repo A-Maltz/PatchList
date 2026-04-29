@@ -333,4 +333,20 @@ public final class PatchList<E> extends AbstractSequentialList<E> implements Ser
 
         return result;
     }
+
+    @Override
+    public void forEach(java.util.function.Consumer<? super E> action) {
+        java.util.Objects.requireNonNull(action);
+        int expectedModCount = modCount;
+
+        for (ListNode<E> node = head; node != null; node = node.next) {
+            for (int i = 0; i < node.activeElements; i++) {
+                if (modCount != expectedModCount)
+                    throw new java.util.ConcurrentModificationException();
+                @SuppressWarnings("unchecked")
+                E element = (E) node.data[i];
+                action.accept(element);
+            }
+        }
+    }
 }
