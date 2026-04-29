@@ -5,7 +5,7 @@ import java.util.AbstractSequentialList;
 import java.util.ListIterator;
 import java.util.NoSuchElementException;
 
-public class PatchList<E> extends AbstractSequentialList<E> implements Serializable {
+public final class PatchList<E> extends AbstractSequentialList<E> implements Serializable {
     @Serial
     private static final long serialVersionUID = 1L;
     private static final Object NOTHING = new Object();
