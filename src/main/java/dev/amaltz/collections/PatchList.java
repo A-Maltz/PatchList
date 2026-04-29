@@ -126,14 +126,16 @@ public final class PatchList<E> extends AbstractSequentialList<E> implements Ser
         fullNode.next = newPatch;
 
         int splitPoint = capacity / 2;
-        int newPatchIdx = 0;
-        for (int i = splitPoint; i < capacity; i++) {
-            newPatch.data[newPatchIdx++] = fullNode.data[i];
-            newPatch.activeElements++;
+        int elementsToMove = capacity - splitPoint;
 
-            fullNode.data[i] = NOTHING;
-            fullNode.activeElements--;
-        }
+        // 1. Native Memory Transfer: Blast the back half of data into the new node
+        System.arraycopy(fullNode.data, splitPoint, newPatch.data, 0, elementsToMove);
+        newPatch.activeElements = elementsToMove;
+
+        // 2. Native Memory Wipe: Instantly overwrite the old slots with NOTHING
+        java.util.Arrays.fill(fullNode.data, splitPoint, capacity, NOTHING);
+        fullNode.activeElements -= elementsToMove;
+
         return newPatch;
     }
 
@@ -213,9 +215,9 @@ public final class PatchList<E> extends AbstractSequentialList<E> implements Ser
                     }
                 }
 
-                // The Safe Mini-Shift (Only shifts active items, never pushes off edge)
-                for (int i = currentNode.activeElements; i > localIndex; i--) {
-                    currentNode.data[i] = currentNode.data[i - 1];
+                int numMoved = currentNode.activeElements - localIndex;
+                if (numMoved > 0) {
+                    System.arraycopy(currentNode.data, localIndex, currentNode.data, localIndex + 1, numMoved);
                 }
 
                 currentNode.data[localIndex] = e;
@@ -234,8 +236,9 @@ public final class PatchList<E> extends AbstractSequentialList<E> implements Ser
                 if (lastReturnedNode == null) throw new IllegalStateException();
 
                 // Shift everything left to instantly fill the gap! No more holes!
-                for (int i = lastReturnedLocalIndex; i < lastReturnedNode.activeElements - 1; i++) {
-                    lastReturnedNode.data[i] = lastReturnedNode.data[i + 1];
+                int numMoved = lastReturnedNode.activeElements - lastReturnedLocalIndex - 1;
+                if (numMoved > 0) {
+                    System.arraycopy(lastReturnedNode.data, lastReturnedLocalIndex + 1, lastReturnedNode.data, lastReturnedLocalIndex, numMoved);
                 }
 
                 lastReturnedNode.data[lastReturnedNode.activeElements - 1] = NOTHING;
@@ -323,7 +326,7 @@ public final class PatchList<E> extends AbstractSequentialList<E> implements Ser
     }
 
     @Override
-    public Object@NotNull[] toArray() {
+    public Object @NotNull [] toArray() {
         Object[] result = new Object[size];
         int currentIndex = 0;
 
