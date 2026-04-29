@@ -11,21 +11,18 @@ import java.util.NoSuchElementException;
 public final class PatchList<E> extends AbstractSequentialList<E> implements Serializable {
     @Serial
     private static final long serialVersionUID = 1L;
-    private static final Object NOTHING = new Object();
 
     static class ListNode<E> {
         ListNode<E> next;
         ListNode<E> prev;
         Object[] data;
-        int activeElements = 0; // Tracks exactly how many real items are in this node
+        int activeElements = 0;
 
         ListNode(ListNode<E> prev, ListNode<E> next, int capacity) {
             this.prev = prev;
             this.next = next;
             this.data = new Object[capacity];
-            for (int i = 0; i < capacity; i++) {
-                this.data[i] = NOTHING;
-            }
+            // No need to fill with NOTHING, null is the default and works perfectly.
         }
     }
 
@@ -48,6 +45,12 @@ public final class PatchList<E> extends AbstractSequentialList<E> implements Ser
         this.tail = head;
     }
 
+    // --- CACHE MANAGEMENT ---
+    private void invalidateCache() {
+        cacheNode = null;
+        cacheLogicalIndex = -1;
+    }
+
     @Override
     public int size() {
         return size;
@@ -58,12 +61,8 @@ public final class PatchList<E> extends AbstractSequentialList<E> implements Ser
         head = new ListNode<>(null, null, capacity);
         tail = head;
         size = 0;
-
-        // Reset the cache!
-        cacheNode = null;
-        cacheLogicalIndex = -1;
-
-        modCount++; // Tell any active iterators to fail
+        invalidateCache(); // FIX: Reset cache
+        modCount++;
     }
 
     @Override
@@ -71,38 +70,61 @@ public final class PatchList<E> extends AbstractSequentialList<E> implements Ser
     public E get(int index) {
         if (index < 0 || index >= size) throw new IndexOutOfBoundsException();
 
-        // 1. THE CACHE HIT: Is the requested index inside our bookmarked node?
+        // 1. CACHE HIT
         if (cacheNode != null && index >= cacheLogicalIndex && index < cacheLogicalIndex + cacheNode.activeElements) {
             return (E) cacheNode.data[index - cacheLogicalIndex];
         }
 
-        // 2. THE CACHE MISS: We have to go find it.
-        ListNode<E> currentNode = head;
-        int logicalIndex = 0;
+        // 2. BI-DIRECTIONAL ROUTING (Optimized)
+        ListNode<E> currentNode;
+        int logicalIndex;
 
-        // Is the cache closer than the head? If so, start from the cache!
-        if (cacheNode != null && index >= cacheLogicalIndex) {
+        int distFromHead = index;
+        int distFromTail = (size - 1) - index;
+        int distFromCache = (cacheNode != null) ? Math.abs(index - cacheLogicalIndex) : Integer.MAX_VALUE;
+
+        // Choose the shortest path: Head, Tail, or Cache
+        if (distFromCache <= distFromHead && distFromCache <= distFromTail) {
             currentNode = cacheNode;
             logicalIndex = cacheLogicalIndex;
-        }
 
-        // Scan forward skipping arrays
-        while (currentNode != null) {
-            if (logicalIndex + currentNode.activeElements > index) {
-                // We found the correct node! Update our bookmark.
-                cacheNode = currentNode;
-                cacheLogicalIndex = logicalIndex;
-
-                return (E) currentNode.data[index - logicalIndex];
+            // Scan forward or backward from cache
+            if (index >= logicalIndex) {
+                while (currentNode != null && logicalIndex + currentNode.activeElements <= index) {
+                    logicalIndex += currentNode.activeElements;
+                    currentNode = currentNode.next;
+                }
+            } else {
+                while (currentNode != null && logicalIndex > index) {
+                    currentNode = currentNode.prev;
+                    logicalIndex -= currentNode.activeElements;
+                }
             }
-            logicalIndex += currentNode.activeElements;
-            currentNode = currentNode.next;
+        } else if (distFromTail < distFromHead) {
+            // Scan backward from tail
+            currentNode = tail;
+            logicalIndex = size - tail.activeElements;
+            while (currentNode != null && logicalIndex > index) {
+                currentNode = currentNode.prev;
+                logicalIndex -= currentNode.activeElements;
+            }
+        } else {
+            // Scan forward from head
+            currentNode = head;
+            logicalIndex = 0;
+            while (currentNode != null && logicalIndex + currentNode.activeElements <= index) {
+                logicalIndex += currentNode.activeElements;
+                currentNode = currentNode.next;
+            }
         }
 
-        throw new IndexOutOfBoundsException();
+        // Update Bookmark
+        cacheNode = currentNode;
+        cacheLogicalIndex = logicalIndex;
+
+        return (E) currentNode.data[index - logicalIndex];
     }
 
-    // --- FAST APPEND ---
     @Override
     public boolean add(E e) {
         if (tail.activeElements < capacity) {
@@ -115,6 +137,7 @@ public final class PatchList<E> extends AbstractSequentialList<E> implements Ser
         }
         size++;
         modCount++;
+        invalidateCache(); // FIX: Reset cache on mutation
         return true;
     }
 
@@ -128,12 +151,12 @@ public final class PatchList<E> extends AbstractSequentialList<E> implements Ser
         int splitPoint = capacity / 2;
         int elementsToMove = capacity - splitPoint;
 
-        // 1. Native Memory Transfer: Blast the back half of data into the new node
+        // Native Memory Transfer
         System.arraycopy(fullNode.data, splitPoint, newPatch.data, 0, elementsToMove);
         newPatch.activeElements = elementsToMove;
 
-        // 2. Native Memory Wipe: Instantly overwrite the old slots with NOTHING
-        java.util.Arrays.fill(fullNode.data, splitPoint, capacity, NOTHING);
+        // Native Memory Wipe (Using standard null)
+        java.util.Arrays.fill(fullNode.data, splitPoint, capacity, null);
         fullNode.activeElements -= elementsToMove;
 
         return newPatch;
@@ -163,20 +186,20 @@ public final class PatchList<E> extends AbstractSequentialList<E> implements Ser
                     localIndex = tail.activeElements;
                 } else {
                     currentNode = head;
-                    logicalIndex = 0;
+                    int nodeStartIndex = 0; // FIX: Use a temp variable for skipping
 
-                    // Skip entire nodes instantly without reading the arrays!
                     while (currentNode != null) {
-                        if (logicalIndex + currentNode.activeElements > index) {
-                            localIndex = index - logicalIndex;
+                        if (nodeStartIndex + currentNode.activeElements > index) {
+                            localIndex = index - nodeStartIndex;
                             break;
-                        } else if (logicalIndex + currentNode.activeElements == index && currentNode.next == null) {
+                        } else if (nodeStartIndex + currentNode.activeElements == index && currentNode.next == null) {
                             localIndex = currentNode.activeElements;
                             break;
                         }
-                        logicalIndex += currentNode.activeElements;
+                        nodeStartIndex += currentNode.activeElements;
                         currentNode = currentNode.next;
                     }
+                    logicalIndex = index; // FIX: Set logical index to the exact requested position
                 }
             }
 
@@ -189,7 +212,6 @@ public final class PatchList<E> extends AbstractSequentialList<E> implements Ser
                 checkForConcurrentModification();
                 if (!hasNext()) throw new NoSuchElementException();
 
-                // Hop to the next node if we finished this one
                 while (currentNode != null && localIndex >= currentNode.activeElements) {
                     currentNode = currentNode.next;
                     localIndex = 0;
@@ -206,6 +228,8 @@ public final class PatchList<E> extends AbstractSequentialList<E> implements Ser
 
             @Override
             public void add(E e) {
+                checkForConcurrentModification();
+
                 if (currentNode.activeElements == capacity) {
                     ListNode<E> newPatch = splitNode(currentNode);
                     int splitPoint = capacity / 2;
@@ -227,31 +251,53 @@ public final class PatchList<E> extends AbstractSequentialList<E> implements Ser
                 logicalIndex++;
                 size++;
                 lastReturnedNode = null;
+
                 modCount++;
                 expectedModCount = modCount;
+                invalidateCache(); // FIX: Cache invalidated
             }
 
             @Override
             public void remove() {
+                checkForConcurrentModification();
                 if (lastReturnedNode == null) throw new IllegalStateException();
 
-                // Shift everything left to instantly fill the gap! No more holes!
                 int numMoved = lastReturnedNode.activeElements - lastReturnedLocalIndex - 1;
                 if (numMoved > 0) {
                     System.arraycopy(lastReturnedNode.data, lastReturnedLocalIndex + 1, lastReturnedNode.data, lastReturnedLocalIndex, numMoved);
                 }
 
-                lastReturnedNode.data[lastReturnedNode.activeElements - 1] = NOTHING;
                 lastReturnedNode.activeElements--;
+                lastReturnedNode.data[lastReturnedNode.activeElements] = null; // FIX: Standard null for GC
                 size--;
 
-                if (currentNode == lastReturnedNode && localIndex > lastReturnedLocalIndex) {
-                    logicalIndex--;
-                    localIndex--;
+                // FIX: Empty node cleanup (Memory Leak Prevention)
+                if (lastReturnedNode.activeElements == 0 && head != tail) {
+                    if (lastReturnedNode.prev != null) lastReturnedNode.prev.next = lastReturnedNode.next;
+                    else head = lastReturnedNode.next;
+
+                    if (lastReturnedNode.next != null) lastReturnedNode.next.prev = lastReturnedNode.prev;
+                    else tail = lastReturnedNode.prev;
+
+                    // Realign the iterator if it was sitting on the deleted node
+                    if (currentNode == lastReturnedNode) {
+                        currentNode = lastReturnedNode.next;
+                        localIndex = 0;
+                        logicalIndex--; // Account for the removal
+                    } else if (logicalIndex > 0) {
+                        logicalIndex--;
+                    }
+                } else {
+                    if (currentNode == lastReturnedNode && localIndex > lastReturnedLocalIndex) {
+                        logicalIndex--;
+                        localIndex--;
+                    }
                 }
+
                 lastReturnedNode = null;
                 modCount++;
                 expectedModCount = modCount;
+                invalidateCache(); // FIX: Cache invalidated
             }
 
             @Override
@@ -259,6 +305,7 @@ public final class PatchList<E> extends AbstractSequentialList<E> implements Ser
                 checkForConcurrentModification();
                 if (lastReturnedNode == null) throw new IllegalStateException();
                 lastReturnedNode.data[lastReturnedLocalIndex] = e;
+                // No structural change, so we don't need to invalidate cache
             }
 
             @Override
@@ -270,7 +317,6 @@ public final class PatchList<E> extends AbstractSequentialList<E> implements Ser
                 checkForConcurrentModification();
                 if (!hasPrevious()) throw new NoSuchElementException();
 
-                // Step backward, jumping nodes if needed
                 while (currentNode != null && localIndex == 0) {
                     currentNode = currentNode.prev;
                     if (currentNode != null) {
@@ -331,7 +377,6 @@ public final class PatchList<E> extends AbstractSequentialList<E> implements Ser
         int currentIndex = 0;
 
         for (ListNode<E> node = head; node != null; node = node.next) {
-            // Native block-copy of RAM directly from our node to the result array
             System.arraycopy(node.data, 0, result, currentIndex, node.activeElements);
             currentIndex += node.activeElements;
         }
