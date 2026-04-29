@@ -98,6 +98,7 @@ public class PatchList<E> extends AbstractSequentialList<E> implements Serializa
             newPatch.activeElements++;
         }
         size++;
+        modCount++;
         return true;
     }
 
@@ -128,9 +129,13 @@ public class PatchList<E> extends AbstractSequentialList<E> implements Serializa
             private ListNode<E> currentNode;
             private int localIndex = 0;
             private int logicalIndex;
-
             private ListNode<E> lastReturnedNode = null;
             private int lastReturnedLocalIndex = -1;
+            private int expectedModCount = modCount;
+
+            private void checkForConcurrentModification() {
+                if (modCount != expectedModCount) throw new java.util.ConcurrentModificationException();
+            }
 
             // --- THE O(N/16) FAST FORWARD ---
             {
@@ -163,6 +168,7 @@ public class PatchList<E> extends AbstractSequentialList<E> implements Serializa
             @Override
             @SuppressWarnings("unchecked")
             public E next() {
+                checkForConcurrentModification();
                 if (!hasNext()) throw new NoSuchElementException();
 
                 // Hop to the next node if we finished this one
@@ -203,6 +209,8 @@ public class PatchList<E> extends AbstractSequentialList<E> implements Serializa
                 logicalIndex++;
                 size++;
                 lastReturnedNode = null;
+                modCount++;
+                expectedModCount = modCount;
             }
 
             @Override
@@ -223,10 +231,13 @@ public class PatchList<E> extends AbstractSequentialList<E> implements Serializa
                     localIndex--;
                 }
                 lastReturnedNode = null;
+                modCount++;
+                expectedModCount = modCount;
             }
 
             @Override
             public void set(E e) {
+                checkForConcurrentModification();
                 if (lastReturnedNode == null) throw new IllegalStateException();
                 lastReturnedNode.data[lastReturnedLocalIndex] = e;
             }
@@ -237,6 +248,7 @@ public class PatchList<E> extends AbstractSequentialList<E> implements Serializa
             @Override
             @SuppressWarnings("unchecked")
             public E previous() {
+                checkForConcurrentModification();
                 if (!hasPrevious()) throw new NoSuchElementException();
 
                 // Step backward, jumping nodes if needed
