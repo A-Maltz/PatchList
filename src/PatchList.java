@@ -2,6 +2,7 @@ import org.jetbrains.annotations.NotNull;
 
 import java.io.*;
 import java.util.AbstractSequentialList;
+import java.util.Iterator;
 import java.util.ListIterator;
 import java.util.NoSuchElementException;
 
@@ -285,6 +286,16 @@ public final class PatchList<E> extends AbstractSequentialList<E> implements Ser
 
             @Override
             public int previousIndex() { return logicalIndex - 1; }
+        };
+    }
+
+    public Iterator<E> descendingIterator() {
+        return new Iterator<>() {
+            private final ListIterator<E> it = listIterator(size());
+
+            @Override public boolean hasNext() { return it.hasPrevious(); }
+            @Override public E next() { return it.previous(); }
+            @Override public void remove() { it.remove(); }
         };
     }
 
