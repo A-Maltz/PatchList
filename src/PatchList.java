@@ -308,4 +308,18 @@ public class PatchList<E> extends AbstractSequentialList<E> implements Serializa
             this.add(element);
         }
     }
+
+    @Override
+    public Object@NotNull[] toArray() {
+        Object[] result = new Object[size];
+        int currentIndex = 0;
+
+        for (ListNode<E> node = head; node != null; node = node.next) {
+            // Native block-copy of RAM directly from our node to the result array
+            System.arraycopy(node.data, 0, result, currentIndex, node.activeElements);
+            currentIndex += node.activeElements;
+        }
+
+        return result;
+    }
 }
