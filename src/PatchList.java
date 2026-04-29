@@ -26,6 +26,8 @@ public class PatchList<E> extends AbstractSequentialList<E> implements Serializa
         }
     }
 
+    private transient ListNode<E> cacheNode = null;
+    private transient int cacheLogicalIndex = -1;
     private static final int DEFAULT_CAPACITY = 16;
     private final int capacity;
     private transient ListNode<E> head;
@@ -46,6 +48,42 @@ public class PatchList<E> extends AbstractSequentialList<E> implements Serializa
     @Override
     public int size() {
         return size;
+    }
+
+    @Override
+    @SuppressWarnings("unchecked")
+    public E get(int index) {
+        if (index < 0 || index >= size) throw new IndexOutOfBoundsException();
+
+        // 1. THE CACHE HIT: Is the requested index inside our bookmarked node?
+        if (cacheNode != null && index >= cacheLogicalIndex && index < cacheLogicalIndex + cacheNode.activeElements) {
+            return (E) cacheNode.data[index - cacheLogicalIndex];
+        }
+
+        // 2. THE CACHE MISS: We have to go find it.
+        ListNode<E> currentNode = head;
+        int logicalIndex = 0;
+
+        // Is the cache closer than the head? If so, start from the cache!
+        if (cacheNode != null && index >= cacheLogicalIndex) {
+            currentNode = cacheNode;
+            logicalIndex = cacheLogicalIndex;
+        }
+
+        // Scan forward skipping arrays
+        while (currentNode != null) {
+            if (logicalIndex + currentNode.activeElements > index) {
+                // We found the correct node! Update our bookmark.
+                cacheNode = currentNode;
+                cacheLogicalIndex = logicalIndex;
+
+                return (E) currentNode.data[index - logicalIndex];
+            }
+            logicalIndex += currentNode.activeElements;
+            currentNode = currentNode.next;
+        }
+
+        throw new IndexOutOfBoundsException();
     }
 
     // --- FAST APPEND ---
