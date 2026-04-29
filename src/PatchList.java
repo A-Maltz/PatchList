@@ -51,6 +51,19 @@ public class PatchList<E> extends AbstractSequentialList<E> implements Serializa
     }
 
     @Override
+    public void clear() {
+        head = new ListNode<>(null, null, capacity);
+        tail = head;
+        size = 0;
+
+        // Reset the cache!
+        cacheNode = null;
+        cacheLogicalIndex = -1;
+
+        modCount++; // Tell any active iterators to fail
+    }
+
+    @Override
     @SuppressWarnings("unchecked")
     public E get(int index) {
         if (index < 0 || index >= size) throw new IndexOutOfBoundsException();
